@@ -17,6 +17,7 @@ Q_DECLARE_METATYPE(PyEnvModule)*/
 class PyEnvironment
 {
     bool m_initialized;
+    bool m_skipFinalize;
     QMutex m_muxCounter;
     int m_connectedRunners = 0;
     PyThreadState *m_pPyThreadState = nullptr;
@@ -35,6 +36,8 @@ public:
 
     //PyRunner * getInstanceModule(QString modulePath, QStringList dependecies = QStringList());
     //void unloadModule(PyRunner* runner);
+    bool getSkipFinalize() const;
+    void setSkipFinalize(bool skipFinalize);
 };
 
 #endif // PYENVIRONMENT_H
