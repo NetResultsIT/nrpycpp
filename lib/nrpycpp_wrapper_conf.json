@@ -36,7 +36,9 @@
         "    PyRunner *m_pPyRunner;",
         "\npublic:",
         "    PyRunnerQt(QString pythonscript, QStringList dependencies);",
-        "    ~PyRunnerQt();\n\n"
+        "    ~PyRunnerQt();",
+        "    static void setSkipFinalize(bool skipFinalize);",
+        "    static bool getSkipFinalize();\n\n"
       ],
       "header_class_stop": [
         "\n};",
@@ -60,7 +62,24 @@
         "{",
         "    delete m_pPyRunner;",
         "    PyEnvironment::getInstance().stop(); //FIXME we should add runner usages",
-        "}\n\n"
+        "}\n\n",
+        "/*!",
+        "* \\brief PyRunner::setSkipFinalize, default value is false, Py_Finalize is kinda bugged, this flag prevents any Py_Finalize call when the runner terminates.",
+        "* \\param skipFinalize the new value for the option",
+        "* \\note Acts at Python environment level and works for every runner terminating after setting the flag, be carefull",
+        "*/",
+       "void PyRunnerQt::setSkipFinalize(bool skipFinalize)",
+       "{",
+       "    PyEnvironment::getInstance().setSkipFinalize(skipFinalize);",
+       "}\n\n",
+       "/*!",
+       " * \\brief PyRunner::getSkipFinalize see method PyRunner::setSkipFinalize for more",
+       " * \\return the current value for skipFinalize, default value is false",
+       " */",
+       "bool PyRunnerQt::getSkipFinalize()",
+       "{",
+       "    return PyEnvironment::getInstance().getSkipFinalize();",
+       "}\n\n"
       ],
       "impl_class_stop": []
     },
@@ -69,3 +88,4 @@
     }
   }
 }
+
