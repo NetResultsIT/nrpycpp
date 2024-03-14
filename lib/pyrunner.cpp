@@ -28,7 +28,10 @@ PyRunner::~PyRunner()
     */
 
     PRINT_THREAD_INFO
-    tearDown();
+
+    emit tearDownSignal();
+    m_pPythonThread->exit();
+    //block and wait for teardown to be completed
     Py_DecRef(m_module_dict);
 }
 
@@ -40,16 +43,17 @@ PyRunner::PyRunner(QString scriptPath, QStringList dependecies)
     m_sourceFilePy = scriptPath;
     m_dependencies = dependecies;
     m_module_dict = NULL;
+    m_interpreterState = NULL;
     qRegisterMetaType<PyFunctionCall>("PyFunctionCall");
 
     m_pPythonThread = new QThread();
     m_pPythonThread->setObjectName("NrPyCpp-" + QFileInfo(scriptPath).completeBaseName() + QUuid::createUuid().toString());
     m_pPythonThread->start();
 
-    connect(m_pPythonThread, &QThread::finished, m_pPythonThread, &QThread::deleteLater);
+//    connect(m_pPythonThread, &QThread::finished, this, &PyRunner::tearDown, Qt::BlockingQueuedConnection);
 
     connect(this, &PyRunner::startCallRequestedSignal, this, &PyRunner::onStartCallRequest);
-    connect(this, &PyRunner::tearDownSignal, this, &PyRunner::tearDown);
+    connect(this, &PyRunner::tearDownSignal, this, &PyRunner::tearDown, Qt::BlockingQueuedConnection);
 
     this->moveToThread(m_pPythonThread);
 
@@ -92,24 +96,7 @@ void PyRunner::setup()
 void PyRunner::tearDown()
 {
     PRINT_THREAD_INFO
-    unloadCurrentModule();
-    m_pPythonThread->exit();
-}
-
-
-PyGILState_STATE PyRunner::openCallContext()
-{
-    PyGILState_STATE gstate = PyGILState_Ensure();
-    return gstate;
-}
-
-
-void PyRunner::closeCallContext(PyGILState_STATE state)
-{
-    PyGILState_Release(state);
-
-    //not needed https://stackoverflow.com/questions/8451334/why-is-pygilstate-release-throwing-fatal-python-errors
-    //PyEval_ReleaseLock();
+    unloadInterpreter();
 }
 
 
@@ -125,8 +112,8 @@ void PyRunner::processCall(PyFunctionCall call)
     }
 
     try {
-        PyGILState_STATE gstate = openCallContext();
-
+        loadInterpreter();
+        loadCurrentModule();
         PyObject * py_lib_mod_dict = getModuleDict(); //borrowed reference of global variable
         if ( !py_lib_mod_dict ) {
             //FIXME - log error and return (2022-01-26 FL)
@@ -195,7 +182,6 @@ void PyRunner::processCall(PyFunctionCall call)
         Py_DecRef(py_func);
         Py_DecRef(py_args);
 
-        closeCallContext(gstate);
         handleCompletedCall(call);
     } catch (...) {
         //qDebug() << e.what();
@@ -321,12 +307,12 @@ bool PyRunner::checkCall(QUuid callID)
     PyFunctionCall c = getCall(callID);
 
     if (!c.isValid()) {
-        qDebug() << "Call has not yet been started";
+//        qDebug() << "Call has not yet been started";
         return false;
     }
 
     if (!c.result().endTime.isValid()) {
-        qDebug() << "Call has not yet completed";
+//        qDebug() << "Call has not yet completed";
         return false;
     }
 
@@ -551,27 +537,32 @@ void PyRunner::loadCurrentModule()
 }
 
 
-void PyRunner::unloadCurrentModule()
+void PyRunner::loadInterpreter()
 {
-    PyGILState_STATE gstate = PyGILState_Ensure();
-    //PyEval_InitThreads();
+    if(m_interpreterState != NULL)
+        return;
 
-    //unload imported paths
-    QString unloadPathCommand = "sys.path.remove(\""+m_scriptFilePath+"\")";
-    QString unloadModuleCommand = "del sys.modules[\""+m_scriptFileName+"\"]";
-    PyRun_SimpleString("import sys");
-    PyRun_SimpleString(unloadPathCommand.toUtf8().data());
-    PyRun_SimpleString(unloadModuleCommand.toUtf8().data());
+    m_interpreterState = Py_NewInterpreter();
 
-    foreach (QString dependency, m_dependencies)
-    {
-        unloadPathCommand = "sys.path.remove(\""+dependency+"\")";
-        PyRun_SimpleString(unloadPathCommand.toUtf8().data());
+    if(!m_interpreterState) {
+        qDebug()<<"CANNOT CREATE SUB PYTHON INTEPRETER";
+        PyErr_Print();
+        return;
     }
-
-    PyGILState_Release(gstate);
-//    PyEval_ReleaseLock();
 }
+
+
+void PyRunner::unloadInterpreter()
+{
+    if(m_interpreterState == NULL)
+        return;
+
+    //DEINIT STARTS
+    PyThreadState_Swap(m_interpreterState);
+    Py_EndInterpreter(m_interpreterState);
+    m_interpreterState = NULL;
+}
+
 
 /*!
  * \brief PyRunner::syncCallFunction calls the specified function synchronously i.e. will not return until the processing has finished
