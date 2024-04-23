@@ -1,5 +1,5 @@
 
-NRPYCPP_VERSION = 1.0.1
+NRPYCPP_VERSION = 1.0.5
 
 #DO NOT CHANGE ANYTHING BELOW THIS LINE UNLESS YOU ARE A MAINTAINER
 
@@ -108,6 +108,7 @@ TARGET = $$join(TARGET,,bin/,)
 #gcc compiler quirks
 !win32 {
     TARGET = $$join(TARGET,,$$BUILDTYPE/,)
+    VERSION = $$NRPYCPP_VERSION
 }
 
 
@@ -122,13 +123,16 @@ macos: {
     QMAKE_POST_LINK+="install_name_tool -change @rpath/Python3.framework/Versions/$${PYTHON_VERSION}/Python3 @rpath/$${PYTHONLIB} $${DLL}.dylib $$escape_expand(\\n\\t)"
 }
 
-
 unix:!ios {
+    message("DLL .................$${DLL}")
     #QMAKE_POST_LINK+="mkdir -p $$FINALDIR $$escape_expand(\\n\\t)"
     QMAKE_POST_LINK+="mkdir -p $$INCLUDE_DIR $$escape_expand(\\n\\t)"
     #QMAKE_POST_LINK+="cp -aP $${DLL}.* $$FINALDIR $$escape_expand(\\n\\t)"
     QMAKE_POST_LINK+="cp -aP $${DLL}.* $$DSTDIR $$escape_expand(\\n\\t)"
     for(vinc, DIST_INCS):QMAKE_POST_LINK+="$$QMAKE_COPY $$vinc \"$$INCLUDE_DIR\" $$escape_expand(\\n\\t)"
+    #copy the python lib
+    PYTHONLIB=$$PWD/python-ub22.04/libpython$${PYTHON_VERSION}.so
+    QMAKE_POST_LINK+="cp -aP $${PYTHONLIB}* $${DSTDIR} $$escape_expand(\\n\\t)"
 }
 
 WINEXT = lib pdb dll

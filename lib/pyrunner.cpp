@@ -27,30 +27,38 @@ PyRunner::~PyRunner()
      * Thread will self destroy when the finished() signal arrives
     */
 
-    PRINT_THREAD_INFO
-    tearDown();
+    PRINT_THREAD_INFO    
+    unloadInterpreter();
+//    m_pPythonThread->exit();
+    m_pPythonThread->terminate();
+    m_pPythonThread->wait(5000);
+    //block and wait for teardown to be completed
     Py_DecRef(m_module_dict);
+//    m_pPythonThread->deleteLater();
+    delete m_pPythonThread;
 }
 
 
 PyRunner::PyRunner(QString scriptPath, QStringList dependecies)
 {
+//    qDebug()<<PY_MAJOR_VERSION;
+//    qDebug()<<PY_MINOR_VERSION;
+//    qDebug()<<PY_MICRO_VERSION;
     PRINT_THREAD_INFO
+    m_currentModuleLoaded = false;
     m_syntaxError = false;
     m_sourceFilePy = scriptPath;
     m_dependencies = dependecies;
     m_module_dict = NULL;
+    m_interpreterState = NULL;
     qRegisterMetaType<PyFunctionCall>("PyFunctionCall");
 
     m_pPythonThread = new QThread();
     m_pPythonThread->setObjectName("NrPyCpp-" + QFileInfo(scriptPath).completeBaseName() + QUuid::createUuid().toString());
     m_pPythonThread->start();
 
-    connect(m_pPythonThread, &QThread::finished, m_pPythonThread, &QThread::deleteLater);
-
     connect(this, &PyRunner::startCallRequestedSignal, this, &PyRunner::onStartCallRequest);
-    connect(this, &PyRunner::tearDownSignal, this, &PyRunner::tearDown);
-
+    //connect(m_pPythonThread, &QThread::finished, m_pPythonThread, &QThread::deleteLater);
     this->moveToThread(m_pPythonThread);
 
     PRINT_THREAD_INFO
@@ -77,6 +85,7 @@ void PyRunner::setup()
 
         m_scriptFileName = scriptFileInfo.completeBaseName();
         m_scriptFilePath = scriptFileInfo.dir().path();
+        loadInterpreter();
     }
     catch(...)
     {
@@ -86,30 +95,6 @@ void PyRunner::setup()
         qCritical() << "[ERROR] cannot setup pyrunner";
         PyErr_Print();
     }
-}
-
-
-void PyRunner::tearDown()
-{
-    PRINT_THREAD_INFO
-    unloadCurrentModule();
-    m_pPythonThread->exit();
-}
-
-
-PyGILState_STATE PyRunner::openCallContext()
-{
-    PyGILState_STATE gstate = PyGILState_Ensure();
-    return gstate;
-}
-
-
-void PyRunner::closeCallContext(PyGILState_STATE state)
-{
-    PyGILState_Release(state);
-
-    //not needed https://stackoverflow.com/questions/8451334/why-is-pygilstate-release-throwing-fatal-python-errors
-    //PyEval_ReleaseLock();
 }
 
 
@@ -125,8 +110,8 @@ void PyRunner::processCall(PyFunctionCall call)
     }
 
     try {
-        PyGILState_STATE gstate = openCallContext();
-
+        PyEval_RestoreThread(m_interpreterState);// no reference
+        loadCurrentModule();
         PyObject * py_lib_mod_dict = getModuleDict(); //borrowed reference of global variable
         if ( !py_lib_mod_dict ) {
             //FIXME - log error and return (2022-01-26 FL)
@@ -142,16 +127,17 @@ void PyRunner::processCall(PyFunctionCall call)
             qCritical() << "CRITICAL - cannot use Python module dictionary...";
         }
 
-        char * p = new char[call.functionName().length() + 1];
-        QSharedPointer<char> function = QSharedPointer<char>(p);
-        strcpy(function.data(), call.functionName().toUtf8().constData());
+        //char * p = new char[call.functionName().length() + 1];
+        //QSharedPointer<char> function = QSharedPointer<char>(p);
+        //strcpy(function.data(), call.functionName().toUtf8().constData());
 
         //get function name
         PyObject * py_function_name = NULL;
 
         //PyString_FromString
         if (!call.result().error)
-            py_function_name = PyUnicode_FromString(function.data()); //new reference
+            py_function_name = PyUnicode_FromString(call.functionName().toUtf8().data()); //new reference
+            //py_function_name = PyUnicode_FromString(function.data()); //new reference
 
         if (!py_function_name)
             call.result().error = true;
@@ -194,8 +180,7 @@ void PyRunner::processCall(PyFunctionCall call)
         Py_DecRef(py_function_name);
         Py_DecRef(py_func);
         Py_DecRef(py_args);
-
-        closeCallContext(gstate);
+        PyEval_SaveThread();
         handleCompletedCall(call);
     } catch (...) {
         //qDebug() << e.what();
@@ -321,12 +306,12 @@ bool PyRunner::checkCall(QUuid callID)
     PyFunctionCall c = getCall(callID);
 
     if (!c.isValid()) {
-        qDebug() << "Call has not yet been started";
+//        qDebug() << "Call has not yet been started";
         return false;
     }
 
     if (!c.result().endTime.isValid()) {
-        qDebug() << "Call has not yet completed";
+//        qDebug() << "Call has not yet completed";
         return false;
     }
 
@@ -480,7 +465,7 @@ QVariant PyRunner::parseObject(PyObject *object)
         PyErr_Print();
         Py_DecRef(objectsRepresentation);
     } else if(PyLong_CheckExact(object) ) {
-        int value = PyLong_AsLong(object);
+        int value = PyLong_AsLong(object);//no reference
         returnValue.setValue(value);
     } else if(PyBool_Check(object) ) {
         int intbool = PyObject_IsTrue(object);
@@ -528,6 +513,11 @@ QVariant PyRunner::parseObject(PyObject *object)
 
 void PyRunner::loadCurrentModule()
 {
+    if (m_currentModuleLoaded)
+    {
+        return;
+    }
+
     PyObject* sys = PyImport_ImportModule( "sys" ); //new reference
     PyObject* sys_path = PyObject_GetAttrString( sys, "path" ); //new reference
     PyObject* folder_path = PyUnicode_FromString( m_scriptFilePath.toUtf8().data() ); //new reference
@@ -548,30 +538,48 @@ void PyRunner::loadCurrentModule()
     Py_DecRef(sys);
     Py_DecRef(sys_path);
     Py_DecRef(folder_path);
+
+    m_currentModuleLoaded = true;
 }
 
 
-void PyRunner::unloadCurrentModule()
+void PyRunner::loadInterpreter()
 {
-    PyGILState_STATE gstate = PyGILState_Ensure();
-    //PyEval_InitThreads();
+    if(m_interpreterState != NULL)
+        return;
 
-    //unload imported paths
-    QString unloadPathCommand = "sys.path.remove(\""+m_scriptFilePath+"\")";
-    QString unloadModuleCommand = "del sys.modules[\""+m_scriptFileName+"\"]";
-    PyRun_SimpleString("import sys");
-    PyRun_SimpleString(unloadPathCommand.toUtf8().data());
-    PyRun_SimpleString(unloadModuleCommand.toUtf8().data());
+    m_interpreterState = Py_NewInterpreter();
 
-    foreach (QString dependency, m_dependencies)
-    {
-        unloadPathCommand = "sys.path.remove(\""+dependency+"\")";
-        PyRun_SimpleString(unloadPathCommand.toUtf8().data());
+    if(!m_interpreterState) {
+        qDebug()<<"CANNOT CREATE SUB PYTHON INTEPRETER";
+        PyErr_Print();
+        return;
     }
-
-    PyGILState_Release(gstate);
-//    PyEval_ReleaseLock();
+    PyEval_SaveThread();
 }
+
+
+void PyRunner::unloadInterpreter()
+{
+    if(m_interpreterState == NULL)
+        return;
+
+    //DEINIT STARTS
+    PyEval_RestoreThread(m_interpreterState);//no reference
+    if (PY_MAJOR_VERSION >= 3 &&
+        PY_MINOR_VERSION >= 10)
+    {
+        PyThreadState_Clear(m_interpreterState);
+        Py_EndInterpreter(m_interpreterState);
+    }
+    else
+    {
+        PyInterpreterState_Clear(m_interpreterState->interp);
+        PyInterpreterState_Delete(m_interpreterState->interp);
+    }
+    m_interpreterState = NULL;
+}
+
 
 /*!
  * \brief PyRunner::syncCallFunction calls the specified function synchronously i.e. will not return until the processing has finished

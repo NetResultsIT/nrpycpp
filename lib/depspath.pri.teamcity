@@ -3,11 +3,11 @@
 #PYTHON_INCLUDE_PATH = path/to/python/includes
 #PYTHON_VERSION = the version of python used (for mac we need python3)
 
-#linux usual defaults
+#linux we provide python ourselves
 linux {
-PYTHON_VERSION=3.8
-PYTHON_LIB_PATH     = /usr/lib/python$${PYTHON_VERSION}
-PYTHON_INCLUDE_PATH = /usr/include/python$${PYTHON_VERSION}
+PYTHON_VERSION=3.10
+PYTHON_LIB_PATH     = $$PWD/python-ub22.04
+PYTHON_INCLUDE_PATH = $$PWD/python-ub22.04/include
 }
 
 #on mac we use xcode provided python

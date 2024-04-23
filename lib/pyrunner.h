@@ -52,16 +52,16 @@ class PyRunner : public QObject
     void untrackCall(PyFunctionCall call);
     bool checkCall(QUuid callID);
 
-    void loadCurrentModule();
-    void unloadCurrentModule();
+    PyThreadState * m_interpreterState;
+    void loadInterpreter();
+    void unloadInterpreter();
+
     PyObject * getModuleDict();
     PyObject * m_module_dict;
+    bool m_currentModuleLoaded;
+    void loadCurrentModule();
 
     void setup();
-
-    /* Function context call */
-    PyGILState_STATE openCallContext();
-    void closeCallContext(PyGILState_STATE state);
 
     QVariant parseObject(PyObject * object);
     PyObject * getTupleParams(QVariantList paramList);
@@ -95,14 +95,12 @@ private:
     void handleCompletedCall(PyFunctionCall call);
 
 signals:
-    void tearDownSignal(); //FIXME - WTF? this is never emitted (2022-02-01 FL)
     void startCallRequestedSignal(PyFunctionCall call);
     //START_SIGNAL_METHODS
     void callCompletedSignal(QString);
     //END_SIGNAL_METHODS
 
 private slots:
-    void tearDown();
     void onStartCallRequest(PyFunctionCall call);
 };
 
