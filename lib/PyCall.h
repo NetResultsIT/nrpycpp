@@ -30,7 +30,6 @@ public:
         , m_isSyncCall(i_syncCall)
     {
         m_CallID = QUuid::createUuid();
-        qDebug() << "Created call with id: " << m_CallID.toString() << " for function: " << i_pyFunctionToCall;
     }
     //PyFunctionCall(const PyFunctionCall &rhs) = delete;
     PyFunctionCall() { m_valid = false; }; //needed to use in QHash / QMap

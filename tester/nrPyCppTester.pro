@@ -1,5 +1,8 @@
 QT -= gui
 
+# Qt 6.8's qyieldcpu.h calls __yield() without declaring it, which recent Apple clang (Xcode 26) rejects
+macos: QMAKE_CXXFLAGS += -Wno-error=implicit-function-declaration
+
 SOURCES = main.cpp \
     pycpptester.cpp
 

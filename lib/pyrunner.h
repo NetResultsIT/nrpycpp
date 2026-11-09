@@ -11,6 +11,7 @@
 #include <QString>
 #include <QThread>
 #include <QMutex>
+#include <QWaitCondition>
 #include <QUuid>
 #include <QMap>
 #include <QVariantList>
@@ -22,7 +23,24 @@
 
 #pragma push_macro("slots")
 #undef slots
+#if defined(_MSC_VER) && defined(_DEBUG) && !defined(NRPYCPP_PYTHON_DEBUG)
+/* pyconfig.h turns _DEBUG into Py_DEBUG and auto-links pythonXY_d.lib, which only exists
+ * in a debug build of CPython. Unless NRPYCPP_PYTHON_DEBUG is defined we build our debug
+ * binaries against the release interpreter: include the CRT headers first, then hide _DEBUG */
+#include <cerrno>
+#include <climits>
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#undef _DEBUG
 #include <Python.h>
+#define _DEBUG 1
+#else
+#include <Python.h>
+#endif
 #pragma pop_macro("slots")
 
 #include "PyCall.h"
@@ -47,15 +65,17 @@ class PyRunner : public QObject
 
     QHash<QUuid, PyFunctionCall> m_calls;
     QMutex m_callsMutex;
+    QWaitCondition m_callsCondition; //signalled (with m_callsMutex) whenever a call completes
     void trackCall(PyFunctionCall call);
     PyFunctionCall getCall(QUuid callID);
     void untrackCall(PyFunctionCall call);
-    bool checkCall(QUuid callID);
 
+    /* the following methods must be called with the GIL held */
     void loadCurrentModule();
     void unloadCurrentModule();
-    PyObject * getModuleDict();
+    PyObject * getModuleDict(QString *errorMessage);
     PyObject * m_module_dict;
+    QStringList m_addedSearchPaths; //the entries this runner appended to sys.path
 
     void setup();
 
@@ -63,16 +83,16 @@ class PyRunner : public QObject
     PyGILState_STATE openCallContext();
     void closeCallContext(PyGILState_STATE state);
 
-    QVariant parseObject(PyObject * object);
-    PyObject * getTupleParams(QVariantList paramList);
+    /* conversions, with the GIL held: on failure they return an invalid value and fill errorMessage */
+    QVariant parseObject(PyObject * object, QString *errorMessage);
+    PyObject * toPyObject(const QVariant &value, QString *errorMessage);
+    PyObject * getTupleParams(const QVariantList &paramList, QString *errorMessage);
+    static QString takePythonError();
 
     /*debug utils*/
     void printPyTuple(PyObject* tuple);
     void printPyList(PyObject *list);
     void printPyDict(PyObject *list);
-
-    //errors
-    bool m_syntaxError;
 
 public:
     PyRunner(QString scriptPath, QStringList dependencies=QStringList());
@@ -95,14 +115,12 @@ private:
     void handleCompletedCall(PyFunctionCall call);
 
 signals:
-    void tearDownSignal(); //FIXME - WTF? this is never emitted (2022-02-01 FL)
     void startCallRequestedSignal(PyFunctionCall call);
     //START_SIGNAL_METHODS
     void callCompletedSignal(QString);
     //END_SIGNAL_METHODS
 
 private slots:
-    void tearDown();
     void onStartCallRequest(PyFunctionCall call);
 };
 
