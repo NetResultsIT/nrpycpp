@@ -181,7 +181,7 @@ The result is copied into `lib/last_build/`:
 
 | | macOS | Linux | Windows |
 |---|---|---|---|
-| library | `libnrPyCpp.2.0.0.dylib` + links (`libnrPyCpp_debug.*` for debug) | `libnrPyCpp.so.2.0.0` + links (`_d`) | `nrPyCpp.dll/.lib/.pdb` (`nrPyCppd.*`) |
+| library | `libnrPyCpp.2.0.1.dylib` + links (`libnrPyCpp_debug.*` for debug) | `libnrPyCpp.so.2.0.1` + links (`_d`) | `nrPyCpp.dll/.lib/.pdb` (`nrPyCppd.*`) |
 | python | `libpython3.13.dylib` | `libpython3.13.so*` | `python313.dll` |
 | headers | `include/PyCall.h`, `include/PyRunnerQt.h`, `include/nrPyCppConfig.h` | same | same |
 
