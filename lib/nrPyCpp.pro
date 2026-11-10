@@ -1,17 +1,28 @@
 
-NRPYCPP_VERSION = 1.0.1
+NRPYCPP_VERSION = 2.0.0
 
 #DO NOT CHANGE ANYTHING BELOW THIS LINE UNLESS YOU ARE A MAINTAINER
 
-!include (depspath.pri) {
-    error( "nrPyCpp: Cannot find depspath.pri" )
+# python location: see depspath.pri.sample, or export NRPYCPP_PYTHON_ROOT (and optionally
+# NRPYCPP_PYTHON_VERSION) which take precedence over depspath.pri, e.g. for CI builds
+PYTHON_ROOT = $$(NRPYCPP_PYTHON_ROOT)
+isEmpty(PYTHON_ROOT) {
+    exists($$PWD/depspath.pri): include($$PWD/depspath.pri)
+} else {
+    PYTHON_VERSION = $$(NRPYCPP_PYTHON_VERSION)
+}
+isEmpty(PYTHON_ROOT):isEmpty(PYTHON_INCLUDE_PATH) {
+    error( "nrPyCpp: create depspath.pri from depspath.pri.sample or set NRPYCPP_PYTHON_ROOT" )
 }
 
 QT -= gui
-CONFIG += c++11 debug_and_release
+CONFIG += c++17 debug_and_release
 CONFIG -= app_bundle
 
 TEMPLATE = lib
+# the library version follows the package one (libnrPyCpp.so.2, libnrPyCpp.2.dylib); no version in the dll name
+VERSION = $$NRPYCPP_VERSION
+win32: CONFIG += skip_target_version_ext
 win32 {
     CONFIG += console
 
@@ -24,6 +35,9 @@ win32 {
 }
 
 macos: CONFIG += dll #to build a framework
+
+# Qt 6.8's qyieldcpu.h calls __yield() without declaring it, which recent Apple clang (Xcode 26) rejects
+macos: QMAKE_CXXFLAGS += -Wno-error=implicit-function-declaration
 
 message("Output dir: $$TARGET")
 
@@ -39,19 +53,49 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+        nrpycppmodule.cpp \
         pyenvironment.cpp \
         pyrunner.cpp \
         PyRunnerQt.cpp
 
 
+!isEmpty(PYTHON_ROOT) {
+    # a relocatable runtime with the python-build-standalone ("install_only") layout
+    isEmpty(PYTHON_VERSION): PYTHON_VERSION = 3.13
+    PYTHON_ROOT = $$clean_path($$PYTHON_ROOT)
+    win32 {
+        PYTHON_INCLUDE_PATH = $$PYTHON_ROOT/include
+        PYTHON_LIB_PATH     = $$PYTHON_ROOT/libs
+        PYTHON_DLL_PATH     = $$PYTHON_ROOT
+    } else {
+        PYTHON_INCLUDE_PATH = $$PYTHON_ROOT/include/python$${PYTHON_VERSION}
+        PYTHON_LIB_PATH     = $$PYTHON_ROOT/lib
+    }
+    # lets development builds find the stdlib without any further setup (see nrPyCppConfig.h)
+    BUILD_CONFIG_LINES = "$${LITERAL_HASH}define NRPYCPP_BUILD_PYTHON_HOME \"$$PYTHON_ROOT\""
+} else {
+    win32: PYTHON_DLL_PATH = $$PWD/python-win32
+    BUILD_CONFIG_LINES = "// no build time python home: PYTHON_ROOT was not set"
+}
+!exists($$PYTHON_INCLUDE_PATH/Python.h): error( "nrPyCpp: cannot find Python.h in $$PYTHON_INCLUDE_PATH" )
+write_file($$OUT_PWD/nrpycpp_build_config.h, BUILD_CONFIG_LINES)
+INCLUDEPATH += $$OUT_PWD
+
+# windows import libraries have no dot in the version (python313.lib)
+win32: PYTHON_LIBNAME = python$$replace(PYTHON_VERSION, "\\.", "")
+else:  PYTHON_LIBNAME = python$${PYTHON_VERSION}
+
 INCLUDEPATH += $${PYTHON_INCLUDE_PATH}
-LIBS += -L$${PYTHON_LIB_PATH} -lpython$${PYTHON_VERSION}
+LIBS += -L$${PYTHON_LIB_PATH} -l$${PYTHON_LIBNAME}
 message("nrPyCpp linking python lib version: $${PYTHON_VERSION}")
 message("nrPyCpp LIBS = $${LIBS}")
 
 
 HEADERS += \
     PyCall.h \
+    PyCallBackIface.h \
+    nrpycppmodule.h \
+    nrPyCppConfig.h \
     pyenvironment.h \
     pyrunner.h \
     PyRunnerQt.h \
@@ -65,7 +109,9 @@ DISTFILES += \
 # includes to be packaged
 DIST_INCS += \
 $$PWD/PyCall.h \
-$$PWD/PyRunnerQt.h
+$$PWD/PyCallBackIface.h \
+$$PWD/PyRunnerQt.h \
+$$PWD/nrPyCppConfig.h
 
 CONFIG(debug, debug|release) {
     win32: LIBSUFFIX = "d"
@@ -114,12 +160,22 @@ TARGET = $$join(TARGET,,bin/,)
 # And at last common unix library movements
 INCLUDE_DIR = $$DSTDIR/include
 
-#on mac we need to adjust the libraries id and copy the pythonlib to be distributed
+#copy the python lib to be distributed (on mac adjusting the libraries id if needed)
 macos: {
     PYTHONLIB=libpython$${PYTHON_VERSION}.dylib
-    QMAKE_POST_LINK+="cp $${PYTHON_LIB_PATH}/$${PYTHONLIB} $$DSTDIR $$escape_expand(\\n\\t)"
-    QMAKE_POST_LINK+="install_name_tool -id @rpath/$${PYTHONLIB} $$DSTDIR/$${PYTHONLIB} $$escape_expand(\\n\\t)"
-    QMAKE_POST_LINK+="install_name_tool -change @rpath/Python3.framework/Versions/$${PYTHON_VERSION}/Python3 @rpath/$${PYTHONLIB} $${DLL}.dylib $$escape_expand(\\n\\t)"
+    QMAKE_POST_LINK+="cp \"$${PYTHON_LIB_PATH}/$${PYTHONLIB}\" \"$$DSTDIR\" $$escape_expand(\\n\\t)"
+    isEmpty(PYTHON_ROOT) {
+        # Xcode's Python3.framework: we have to change its id, then re-sign it, since a library with
+        # a broken signature is killed by the loader (SIGKILL with no message on Apple Silicon)
+        QMAKE_POST_LINK+="install_name_tool -id @rpath/$${PYTHONLIB} \"$$DSTDIR/$${PYTHONLIB}\" $$escape_expand(\\n\\t)"
+        QMAKE_POST_LINK+="codesign --force --sign - \"$$DSTDIR/$${PYTHONLIB}\" $$escape_expand(\\n\\t)"
+        QMAKE_POST_LINK+="install_name_tool -change @rpath/Python3.framework/Versions/$${PYTHON_VERSION}/Python3 @rpath/$${PYTHONLIB} \"$${DLL}.dylib\" $$escape_expand(\\n\\t)"
+    }
+    # python-build-standalone already uses @rpath/libpythonX.Y.dylib as id: a plain copy keeps it signed
+}
+
+linux:!isEmpty(PYTHON_ROOT) {
+    QMAKE_POST_LINK+="cp -aP \"$${PYTHON_LIB_PATH}\"/lib$${PYTHON_LIBNAME}.so* \"$$DSTDIR\" $$escape_expand(\\n\\t)"
 }
 
 
@@ -142,7 +198,7 @@ win32 {
     for(ext, WINEXT):QMAKE_POST_LINK+="$$QMAKE_COPY $$join(DLL,,,.$${ext}) \"$$DSTDIR\" $$escape_expand(\\n\\t)"
     for(vinc, DIST_INCS):QMAKE_POST_LINK+="$$QMAKE_COPY $$replace(vinc,"/","\\") \"$$INCLUDE_DIR\" $$escape_expand(\\n\\t)"
     #copy the python lib
-    PYTHONLIB=$$PWD\python-win32\python$${PYTHON_VERSION}.dll
+    PYTHONLIB=$$PYTHON_DLL_PATH/$${PYTHON_LIBNAME}.dll
     QMAKE_POST_LINK+="$$QMAKE_COPY $$replace(PYTHONLIB,"/","\\") \"$$DSTDIR\" $$escape_expand(\\n\\t)"
 }
 
