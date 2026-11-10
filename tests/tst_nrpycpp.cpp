@@ -14,10 +14,13 @@
 
 #include <QtTest>
 #include <QPoint>
+#include <QMutex>
 #include <QProcess>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
 
+#include "PyCallBackIface.h"
 #include "PyRunnerQt.h"
 #include "nrPyCppConfig.h"
 
@@ -29,6 +32,33 @@ static QString testsDir()
 static QString codecScript()
 {
     return testsDir() + "/scripts/codec.py";
+}
+
+static QString talkbackScript()
+{
+    return testsDir() + "/scripts/talkback.py";
+}
+
+/* a PyCallBackIface that just records what it gets (called from the python threads) */
+class RecordingHandler : public PyCallBackIface
+{
+public:
+    QMutex mutex;
+    QStringList output, exceptions, messages;
+    void onStdOutput(const QSharedPointer<QString> &log) override { QMutexLocker l(&mutex); output << *log; }
+    void onException(const QSharedPointer<QString> &msg) override { QMutexLocker l(&mutex); exceptions << *msg; }
+    void onSendMessage(const QSharedPointer<QString> &msg) override { QMutexLocker l(&mutex); messages << *msg; }
+    int outputCount() { QMutexLocker l(&mutex); return output.size(); }
+    int exceptionCount() { QMutexLocker l(&mutex); return exceptions.size(); }
+    int messageCount() { QMutexLocker l(&mutex); return messages.size(); }
+};
+
+static QStringList spyStrings(const QSignalSpy &spy)
+{
+    QStringList l;
+    for (const QList<QVariant> &args : spy)
+        l << args.at(0).toString();
+    return l;
 }
 
 static QStringList codecDependencies()
@@ -269,6 +299,237 @@ private slots:
             delete w;
         }
         QCOMPARE(failures.loadRelaxed(), 0);
+    }
+
+    void talkbackMessage()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        QSignalSpy spy(&runner, &PyRunnerQt::messageReceived);
+        PyFunctionCallResult r = runner.syncCallFunction("send", QVariantList() << QString::fromUtf8("hi \xc3\xa8"));
+        QVERIFY2(!r.error, qPrintable(r.errorMessage));
+        QCOMPARE(r.returnValue.toString(), runner.runnerId());
+        QVERIFY(runner.runnerId().startsWith("NrPyCpp-talkback{"));
+        QTRY_COMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QString::fromUtf8("hi \xc3\xa8"));
+        //another runner has another id
+        PyRunnerQt other(talkbackScript(), QStringList());
+        QVERIFY(other.runnerId() != runner.runnerId());
+        QCOMPARE(other.syncCallFunction("send", QVariantList() << "x").returnValue.toString(), other.runnerId());
+        QCOMPARE(spy.count(), 1);
+    }
+
+    void talkbackMessageErrors()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        QSignalSpy spy(&runner, &PyRunnerQt::messageReceived);
+        PyFunctionCallResult r = runner.syncCallFunction("send_bad");
+        QVERIFY(r.error);
+        QVERIFY2(r.errorMessage.contains("TypeError"), qPrintable(r.errorMessage));
+        QTest::qWait(50);
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void talkbackOutput()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        QSignalSpy out(&runner, &PyRunnerQt::outputReceived);
+        QSignalSpy err(&runner, &PyRunnerQt::errorOutputReceived);
+        QVERIFY(!runner.syncCallFunction("lines").error);
+        QTRY_COMPARE(out.count(), 2);
+        QCOMPARE(spyStrings(out), QStringList({"a", "b"}));
+        //a partial line is delivered when the call ends
+        QVERIFY(!runner.syncCallFunction("partial").error);
+        QTRY_COMPARE(out.count(), 3);
+        QCOMPARE(out.at(2).at(0).toString(), QString("x"));
+        QVERIFY(!runner.syncCallFunction("to_stderr").error);
+        QTRY_COMPARE(err.count(), 1);
+        QCOMPARE(err.at(0).at(0).toString(), QString("oops"));
+        QTest::qWait(50);
+        QCOMPARE(out.count(), 3);
+    }
+
+    void talkbackStreamBehavesLikeAStream()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        PyFunctionCallResult r = runner.syncCallFunction("stream_info");
+        QVERIFY2(!r.error, qPrintable(r.errorMessage));
+        const QVariantList l = r.returnValue.toList();
+        QCOMPARE(l.value(0).toString(), QString("_RoutedStream"));
+        QVERIFY(!l.value(1).toString().isEmpty()); //encoding
+        QVERIFY(!l.value(2).toString().isEmpty()); //errors
+        QCOMPARE(l.value(4).toInt(), 5);           //write() returns the length
+        QCOMPARE(l.value(5).toBool(), true);       //fileno()
+        r = runner.syncCallFunction("write_bad");
+        QVERIFY(r.error);
+        QVERIFY2(r.errorMessage.contains("TypeError"), qPrintable(r.errorMessage));
+    }
+
+    void talkbackTwoRunners_data()
+    {
+        QTest::addColumn<bool>("sameScript");
+        QTest::newRow("same script") << true;
+        QTest::newRow("different scripts") << false;
+    }
+
+    void talkbackTwoRunners()
+    {
+        QFETCH(bool, sameScript);
+        const int calls = 100;
+        PyRunnerQt a(talkbackScript(), QStringList());
+        PyRunnerQt b(sameScript ? talkbackScript() : codecScript(), codecDependencies());
+        QSignalSpy outA(&a, &PyRunnerQt::outputReceived);
+        QSignalSpy outB(&b, &PyRunnerQt::outputReceived);
+        QSignalSpy errA(&a, &PyRunnerQt::errorOutputReceived);
+        QSignalSpy errB(&b, &PyRunnerQt::errorOutputReceived);
+        QAtomicInt failures = 0;
+        QThread *ta = QThread::create([&]() {
+            for (int i = 0; i < calls; i++)
+                if (a.syncCallFunction("chatter", QVariantList() << "A" << 3).error)
+                    failures.ref();
+        });
+        QThread *tb = QThread::create([&]() {
+            for (int i = 0; i < calls; i++) {
+                const bool bad = sameScript
+                        ? b.syncCallFunction("chatter", QVariantList() << "B" << 3).error
+                        : b.syncCallFunction("say", QVariantList() << "B-0\nB-1\nB-2").error;
+                if (bad)
+                    failures.ref();
+            }
+        });
+        ta->start();
+        tb->start();
+        QVERIFY(ta->wait(60000));
+        QVERIFY(tb->wait(60000));
+        delete ta;
+        delete tb;
+        QCOMPARE(failures.loadRelaxed(), 0);
+        //say() prints "B-0\nB-1\nB-2" plus a newline
+        QTRY_COMPARE(outA.count(), calls * 3);
+        QTRY_COMPARE(outB.count(), calls * 3);
+        QTest::qWait(50);
+        QCOMPARE(outA.count(), calls * 3);
+        QCOMPARE(outB.count(), calls * 3);
+        for (const QString &line : spyStrings(outA))
+            QVERIFY2(line.startsWith("A-"), qPrintable(line));
+        for (const QString &line : spyStrings(outB))
+            QVERIFY2(line.startsWith("B-"), qPrintable(line));
+        QCOMPARE(errA.count(), calls); //chatter writes to stderr once every 50 lines (i == 0 only)
+        QCOMPARE(errB.count(), sameScript ? calls : 0);
+        //every line arrived once, in order for each runner
+        QStringList expected;
+        for (int i = 0; i < calls; i++)
+            expected << "A-0" << "A-1" << "A-2";
+        QCOMPARE(spyStrings(outA), expected);
+    }
+
+    void talkbackThread()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        PyRunnerQt other(talkbackScript(), QStringList());
+        QSignalSpy out(&runner, &PyRunnerQt::outputReceived);
+        QSignalSpy msg(&runner, &PyRunnerQt::messageReceived);
+        QSignalSpy outOther(&other, &PyRunnerQt::outputReceived);
+        QSignalSpy msgOther(&other, &PyRunnerQt::messageReceived);
+        QVERIFY(!runner.syncCallFunction("thread_talks").error);
+        QTRY_COMPARE(out.count(), 1);
+        QTRY_COMPARE(msg.count(), 1);
+        QCOMPARE(out.at(0).at(0).toString(), QString("from-thread"));
+        QCOMPARE(msg.at(0).at(0).toString(), QString("msg-from-thread"));
+        QTRY_VERIFY(runner.syncCallFunction("thread_runner_id").returnValue.toStringList().contains(runner.runnerId()));
+        //the pool workers belong to the runner that submitted the work
+        QVERIFY(!other.syncCallFunction("pool_talks").error);
+        QTRY_COMPARE(outOther.count(), 4);
+        QCOMPARE(msgOther.count(), 0);
+        QCOMPARE(out.count(), 1);
+    }
+
+    void talkbackThreadPartialLine()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        QSignalSpy out(&runner, &PyRunnerQt::outputReceived);
+        QVERIFY(!runner.syncCallFunction("thread_partial").error);
+        QTRY_COMPARE(out.count(), 1); //delivered when the thread ends
+        QCOMPARE(out.at(0).at(0).toString(), QString("tail"));
+    }
+
+    void talkbackThreadException()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        PyRunnerQt other(talkbackScript(), QStringList());
+        QSignalSpy exc(&runner, &PyRunnerQt::unhandledException);
+        QSignalSpy excOther(&other, &PyRunnerQt::unhandledException);
+        QSignalSpy err(&runner, &PyRunnerQt::errorOutputReceived);
+        QVERIFY(!runner.syncCallFunction("thread_fails").error);
+        QTRY_COMPARE(exc.count(), 1);
+        const QString tb = exc.at(0).at(0).toString();
+        QVERIFY2(tb.contains("Traceback") && tb.contains("ValueError: thread-boom") && tb.contains("talkback.py"), qPrintable(tb));
+        QTest::qWait(50);
+        QCOMPARE(excOther.count(), 0);
+        QCOMPARE(exc.count(), 1);
+        QCOMPARE(err.count(), 0); //reported once, as an exception only
+        //an exception inside a call is not an unhandled one
+        QVERIFY(runner.syncCallFunction("send_bad").error);
+        QTest::qWait(50);
+        QCOMPARE(exc.count(), 1);
+    }
+
+    void talkbackUntrackedThread()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        QSignalSpy msg(&runner, &PyRunnerQt::messageReceived);
+        QVERIFY(!runner.syncCallFunction("raw_thread").error);
+        QTRY_VERIFY(!runner.syncCallFunction("raw_thread_result").returnValue.toStringList().isEmpty());
+        QCOMPARE(runner.syncCallFunction("raw_thread_result").returnValue.toStringList(), QStringList({"RuntimeError"}));
+        QTest::qWait(50);
+        QCOMPARE(msg.count(), 0);
+    }
+
+    void talkbackCallbackHandler()
+    {
+        PyRunnerQt runner(talkbackScript(), QStringList());
+        RecordingHandler handler;
+        runner.setCallbackHandler(&handler);
+        QVERIFY(!runner.syncCallFunction("everything").error);
+        QTRY_COMPARE(handler.exceptionCount(), 1);
+        QTRY_COMPARE(handler.messageCount(), 1);
+        QTRY_COMPARE(handler.outputCount(), 2);
+        {
+            QMutexLocker l(&handler.mutex);
+            QCOMPARE(handler.output, QStringList({"line-1", "err-1"}));
+            QCOMPARE(handler.messages, QStringList({"hello"}));
+            QVERIFY2(handler.exceptions.at(0).contains("ZeroDivisionError"), qPrintable(handler.exceptions.at(0)));
+        }
+        //removed handlers get nothing
+        runner.setCallbackHandler(nullptr);
+        QVERIFY(!runner.syncCallFunction("lines").error);
+        QTest::qWait(50);
+        QCOMPARE(handler.outputCount(), 2);
+    }
+
+    void talkbackRunnerDestroyedWhileThreadPrints()
+    {
+        QSignalSpy *spy = nullptr;
+        {
+            PyRunnerQt doomed(talkbackScript(), QStringList());
+            RecordingHandler handler;
+            doomed.setCallbackHandler(&handler);
+            QVERIFY(!doomed.syncCallFunction("ghost", QVariantList() << 1.0).error);
+            QTRY_VERIFY(handler.outputCount() > 3);
+            doomed.setCallbackHandler(nullptr);
+            //destroyed here, its daemon thread keeps printing for a while
+        }
+        PyRunnerQt next(talkbackScript(), QStringList());
+        QSignalSpy out(&next, &PyRunnerQt::outputReceived);
+        spy = &out;
+        for (int i = 0; i < 20; i++) {
+            PyFunctionCallResult r = next.syncCallFunction("lines");
+            QVERIFY2(!r.error, qPrintable(r.errorMessage));
+            QTest::qWait(20);
+        }
+        QTest::qWait(1200); //the ghost goes on
+        QCOMPARE(spy->count(), 40);
+        for (const QString &line : spyStrings(*spy))
+            QVERIFY(line == "a" || line == "b");
     }
 
     void virtualEnv()

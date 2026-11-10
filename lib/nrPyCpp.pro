@@ -50,6 +50,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+        nrpycppmodule.cpp \
         pyenvironment.cpp \
         pyrunner.cpp \
         PyRunnerQt.cpp
@@ -89,6 +90,8 @@ message("nrPyCpp LIBS = $${LIBS}")
 
 HEADERS += \
     PyCall.h \
+    PyCallBackIface.h \
+    nrpycppmodule.h \
     nrPyCppConfig.h \
     pyenvironment.h \
     pyrunner.h \
@@ -103,6 +106,7 @@ DISTFILES += \
 # includes to be packaged
 DIST_INCS += \
 $$PWD/PyCall.h \
+$$PWD/PyCallBackIface.h \
 $$PWD/PyRunnerQt.h \
 $$PWD/nrPyCppConfig.h
 

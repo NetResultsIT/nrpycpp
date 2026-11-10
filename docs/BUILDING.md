@@ -204,7 +204,7 @@ Notes:
 
 | | what | how |
 |---|---|---|
-| `tests/tst_nrpycpp.cpp` | QtTest suite of the library: conversions in both directions, edge values, errors and tracebacks, recovery after errors, bundled stdlib (ssl, hashlib, ctypes...), sync latency, sync calls from 4 threads, virtual environment, broken and missing scripts, async calls, re-creating runners, missing python home and venv for another version (both in child processes) | `tests/run_tests.sh` / `tests\run_tests.ps1` |
+| `tests/tst_nrpycpp.cpp` | QtTest suite of the library: conversions in both directions, edge values, errors and tracebacks, recovery after errors, bundled stdlib (ssl, hashlib, ctypes...), sync latency, sync calls from 4 threads, the `nrpycpp` module (messages, per-runner output routing with two runners, threads, thread exceptions, `_thread` threads, `PyCallBackIface`, runner destroyed while a thread prints), virtual environment, broken and missing scripts, async calls, re-creating runners, missing python home and venv for another version (both in child processes) | `tests/run_tests.sh` / `tests\run_tests.ps1` |
 | `tests/tools/test_prepare_python_runtime.py` | unit tests of the packaging tool: safe extraction, pruning of the unix and windows layouts, version resolution, package layout, upload never overwriting (network mocked) | `python3 -m unittest discover -s tests/tools -v` |
 | `tester/` | the original interactive sample | build `tester/nrPyCppTester.pro`, run from its build folder |
 
@@ -227,9 +227,9 @@ Verified on 2026-11-10 with python 3.13.18 (20261026) and Qt 6.8.6:
 
 | platform | result | sync call |
 |---|---|---|
-| macOS 26 arm64, universal package | 22/22 | 12-14 µs |
-| macOS x86_64 (Rosetta), universal package | 22/22 | 13 µs |
-| Windows 11 ARM64 VM, x64 emulated, MSVC 2022, release and debug | 22/22 | 63 µs |
+| macOS 26 arm64, universal package | 34/34 | 12-14 µs |
+| macOS x86_64 (Rosetta), universal package | 34/34 | 13 µs |
+| Windows 11 ARM64 VM, x64 emulated, MSVC 2022, release and debug | 34/34 | 63 µs |
 | Linux | suite not run yet (no Qt image); the package was checked in `ubuntu:22.04` x86_64 (docker, emulated) with a C program embedding it isolated (stdlib imports incl. ssl/ctypes/sqlite3, no RPATH, only glibc dependencies) | |
 
 Published on 2026-11-10: `deps/python/release/3.13.18/{macos,linux64,win64}/`, resolved by `nr_co_deps`

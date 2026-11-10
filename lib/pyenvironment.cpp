@@ -1,5 +1,6 @@
 #include "pyenvironment.h"
 #include "nrPyCppConfig.h"
+#include "nrpycppmodule.h"
 
 #include <QCoreApplication>
 #include <QMutexLocker>
@@ -115,6 +116,10 @@ bool PyEnvironment::initializeInterpreter()
     else if (!isPythonHome(home))
         qWarning() << "NrPyCpp: python home" << home << "does not contain" << stdlibMarker();
 
+    //the built-in module the scripts use to talk back to us: it has to be registered before the interpreter starts
+    if (PyImport_AppendInittab("nrpycpp", nrpycppModuleInit) == -1)
+        qWarning() << "NrPyCpp: cannot register the nrpycpp python module";
+
     PyConfig config;
     PyConfig_InitIsolatedConfig(&config);
     config.install_signal_handlers = 0;
@@ -131,6 +136,8 @@ bool PyEnvironment::initializeInterpreter()
                     << (status.func ? status.func : "") << (status.err_msg ? status.err_msg : "");
         return false;
     }
+
+    nrpycppInstallBootstrap(); //logs a warning on failure, the runners work anyway
 
     QString venv = m_virtualEnv;
     if (venv.isEmpty())
@@ -191,7 +198,8 @@ bool PyEnvironment::start()
     if(!m_initialized && !m_initFailed)
     {
         if (Py_IsInitialized()) {
-            qWarning() << "NrPyCpp: python was already started by the application, using it as it is";
+            qWarning() << "NrPyCpp: python was already started by the application, using it as it is:"
+                       << "the nrpycpp python module and the routing of the output, messages and exceptions to the runners are not available";
             m_initialized = true;
         } else if (initializeInterpreter()) {
             //the interpreter is started once and lives until the process exits: finalizing and restarting

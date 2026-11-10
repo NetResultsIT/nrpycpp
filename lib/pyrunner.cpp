@@ -13,6 +13,43 @@
 
 #define NRPYQT_DEBUG_REMOVETOENABLE
 
+/*
+ * Routing of the output / messages / exceptions of the scripts to the runner they belong to.
+ * The registry maps the runner ids to the runners; everything that is emitted to (or called on) a
+ * runner is done with the registry mutex held, so a runner cannot be destroyed in the meanwhile.
+ * It is recursive because a callback handler may well create or destroy a runner.
+ * Rule: the registry mutex is never held while waiting for the GIL (it is taken with the GIL held).
+ * The registry is leaked on purpose: python threads may still write something during process exit.
+ */
+namespace {
+struct RunnerRegistry
+{
+    QRecursiveMutex mutex;
+    QHash<QString, PyRunner *> runners;
+};
+
+RunnerRegistry &registry()
+{
+    static RunnerRegistry *instance = new RunnerRegistry;
+    return *instance;
+}
+
+//the runner whose call is being processed by this thread
+thread_local QString t_currentRunnerId;
+
+class CurrentRunnerGuard
+{
+    QString m_previous;
+public:
+    explicit CurrentRunnerGuard(const QString &runnerId)
+    {
+        m_previous = t_currentRunnerId;
+        t_currentRunnerId = runnerId;
+    }
+    ~CurrentRunnerGuard() { t_currentRunnerId = m_previous; }
+};
+}
+
 #ifdef NRPYQT_DEBUG
 #define PRINT_THREAD_INFO qDebug() << Q_FUNC_INFO << QThread::currentThread();
 #else
@@ -22,6 +59,16 @@
 PyRunner::~PyRunner()
 {
     PRINT_THREAD_INFO
+    //from now on nothing is routed to this runner anymore (this waits for what is being emitted),
+    //it must be done before waiting for the GIL below
+    {
+        RunnerRegistry &reg = registry();
+        QMutexLocker locker(&reg.mutex);
+        if (reg.runners.value(m_runnerId) == this)
+            reg.runners.remove(m_runnerId);
+        m_pCallbackHandler = nullptr;
+    }
+
     //stop the python thread first: a call that is running is allowed to finish, queued ones are dropped
     m_pPythonThread->quit();
     m_pPythonThread->wait();
@@ -45,8 +92,15 @@ PyRunner::PyRunner(QString scriptPath, QStringList dependecies)
     m_module_dict = nullptr;
     qRegisterMetaType<PyFunctionCall>("PyFunctionCall");
 
+    m_runnerId = "NrPyCpp-" + QFileInfo(scriptPath).completeBaseName() + QUuid::createUuid().toString();
+    {
+        RunnerRegistry &reg = registry();
+        QMutexLocker locker(&reg.mutex);
+        reg.runners.insert(m_runnerId, this);
+    }
+
     m_pPythonThread = new QThread();
-    m_pPythonThread->setObjectName("NrPyCpp-" + QFileInfo(scriptPath).completeBaseName() + QUuid::createUuid().toString());
+    m_pPythonThread->setObjectName(m_runnerId);
     m_pPythonThread->start();
 
     connect(this, &PyRunner::startCallRequestedSignal, this, &PyRunner::onStartCallRequest);
@@ -56,6 +110,121 @@ PyRunner::PyRunner(QString scriptPath, QStringList dependecies)
     PRINT_THREAD_INFO
 
     setup();
+}
+
+
+/*!
+ * \brief PyRunner::runnerId
+ * \return the unique id of this runner, the nrpycpp python module uses it to route what the scripts send back
+ */
+QString PyRunner::runnerId()
+{
+    return m_runnerId;
+}
+
+
+/*!
+ * \brief PyRunner::setCallbackHandler sets the handler that gets output, messages and exceptions of the scripts
+ * \param pHandler the handler (not owned), or nullptr to remove it
+ * \note the handler is called from the python threads with the GIL held; when this method returns
+ * the previous handler is not in use anymore
+ */
+void PyRunner::setCallbackHandler(PyCallBackIface *pHandler)
+{
+    QMutexLocker locker(&registry().mutex);
+    m_pCallbackHandler = pHandler;
+}
+
+
+QString PyRunner::currentRunnerId()
+{
+    return t_currentRunnerId;
+}
+
+
+/*!
+ * \internal
+ * \brief PyRunner::emitOutputLines emits the complete lines buffered for the stream
+ * \param includePartialLine emit also the last line if it has no "\n" yet
+ * \note must be called with the registry mutex held
+ */
+void PyRunner::emitOutputLines(int stream, quintptr threadKey, bool includePartialLine)
+{
+    QString buffer = m_outputBuffers[stream].take(threadKey);
+    QStringList lines;
+    int start = 0;
+    int newLine;
+    while ((newLine = buffer.indexOf(QLatin1Char('\n'), start)) >= 0) {
+        lines << buffer.mid(start, newLine - start);
+        start = newLine + 1;
+    }
+    buffer.remove(0, start);
+    if (includePartialLine && !buffer.isEmpty()) {
+        lines << buffer;
+        buffer.clear();
+    }
+    if (!buffer.isEmpty())
+        m_outputBuffers[stream].insert(threadKey, buffer);
+
+    for (QString &line : lines) {
+        if (line.endsWith(QLatin1Char('\r')))
+            line.chop(1);
+        if (stream == StdErr)
+            emit errorOutputReceived(line);
+        else
+            emit outputReceived(line);
+        if (m_pCallbackHandler)
+            m_pCallbackHandler->onStdOutput(QSharedPointer<QString>::create(line));
+    }
+}
+
+
+bool PyRunner::routeMessage(const QString &runnerId, const QString &text)
+{
+    QMutexLocker locker(&registry().mutex);
+    PyRunner *runner = registry().runners.value(runnerId, nullptr);
+    if (!runner)
+        return false;
+    emit runner->messageReceived(text);
+    if (runner->m_pCallbackHandler)
+        runner->m_pCallbackHandler->onSendMessage(QSharedPointer<QString>::create(text));
+    return true;
+}
+
+
+bool PyRunner::routeOutput(const QString &runnerId, int stream, quintptr threadKey, const QString &text)
+{
+    QMutexLocker locker(&registry().mutex);
+    PyRunner *runner = registry().runners.value(runnerId, nullptr);
+    if (!runner || (stream != StdOut && stream != StdErr))
+        return false;
+    runner->m_outputBuffers[stream][threadKey] += text;
+    runner->emitOutputLines(stream, threadKey, false);
+    return true;
+}
+
+
+bool PyRunner::flushOutput(const QString &runnerId, int stream, quintptr threadKey)
+{
+    QMutexLocker locker(&registry().mutex);
+    PyRunner *runner = registry().runners.value(runnerId, nullptr);
+    if (!runner || (stream != StdOut && stream != StdErr))
+        return false;
+    runner->emitOutputLines(stream, threadKey, true);
+    return true;
+}
+
+
+bool PyRunner::routeException(const QString &runnerId, const QString &traceback)
+{
+    QMutexLocker locker(&registry().mutex);
+    PyRunner *runner = registry().runners.value(runnerId, nullptr);
+    if (!runner)
+        return false;
+    emit runner->unhandledException(traceback);
+    if (runner->m_pCallbackHandler)
+        runner->m_pCallbackHandler->onException(QSharedPointer<QString>::create(traceback));
+    return true;
 }
 
 
@@ -170,6 +339,8 @@ void PyRunner::processCall(PyFunctionCall call)
         return;
     }
 
+    //whatever the script (and the threads it starts) prints or sends meanwhile belongs to this runner
+    CurrentRunnerGuard currentRunner(m_runnerId);
     PyGILState_STATE gstate = openCallContext();
 
     QString errorMessage;
@@ -217,6 +388,12 @@ void PyRunner::processCall(PyFunctionCall call)
     //never leave a pending exception behind, it would make the next call fail in odd ways
     if (PyErr_Occurred())
         PyErr_Clear();
+
+    //a print(x, end="") has no line end: deliver it now, before the caller is told the call completed
+    //(only what this thread wrote: the threads started by the call may be in the middle of a line)
+    const quintptr threadKey = reinterpret_cast<quintptr>(PyThreadState_Get());
+    flushOutput(m_runnerId, StdOut, threadKey);
+    flushOutput(m_runnerId, StdErr, threadKey);
 
     closeCallContext(gstate);
     handleCompletedCall(call);

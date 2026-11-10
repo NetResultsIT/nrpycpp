@@ -31,7 +31,7 @@ done
   `python3 -m unittest discover -s tests/tools -v`.
 
 ## 3. Test before publishing (do not skip)
-Unpack each package and run the suite against it: `NRPYCPP_PYTHON_ROOT=<dir>/python QMAKE=<qt>/bin/qmake tests/run_tests.sh` (22 tests, must all pass).
+Unpack each package and run the suite against it: `NRPYCPP_PYTHON_ROOT=<dir>/python QMAKE=<qt>/bin/qmake tests/run_tests.sh` (34 tests, must all pass).
 - **macOS**: also the x86_64 half: build lib and tests with `"QMAKE_APPLE_DEVICE_ARCHS=x86_64 arm64"`, run
   `arch -x86_64 -e DYLD_LIBRARY_PATH=<repo>/lib/last_build -e DYLD_FRAMEWORK_PATH=<qt>/lib ./tst_nrpycpp`
   (`arch` drops `DYLD_*` without `-e`). Qt kit: `~/Qt/6.8.6/macos`.

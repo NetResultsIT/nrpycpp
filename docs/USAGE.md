@@ -2,7 +2,8 @@
 
 nrPyCpp embeds a CPython interpreter in a Qt application and lets C++ call the functions of a Python
 script, synchronously or asynchronously, converting the arguments and the return value between `QVariant`
-and Python objects.
+and Python objects. The script can talk back: what it prints, the messages it sends and the exceptions of
+its threads reach the runner they belong to (section 7).
 
 Contents:
 [1. Adding it to an application](#1-adding-it-to-an-application) ·
@@ -11,9 +12,10 @@ Contents:
 [4. Errors](#4-errors) ·
 [5. Writing the scripts](#5-writing-the-scripts) ·
 [6. Threads](#6-threads) ·
-[7. Python home and virtual environments](#7-python-home-and-virtual-environments) ·
-[8. Deploying an application](#8-deploying-an-application) ·
-[9. Troubleshooting](#9-troubleshooting)
+[7. Talking back to C++](#7-talking-back-to-c) ·
+[8. Python home and virtual environments](#8-python-home-and-virtual-environments) ·
+[9. Deploying an application](#9-deploying-an-application) ·
+[10. Troubleshooting](#10-troubleshooting)
 
 ---
 
@@ -73,8 +75,12 @@ and `nrPyCppConfig.h` (interpreter configuration). Python's own headers are not 
 PyRunnerQt *runner = new PyRunnerQt("/path/to/rtp_tools.py", QStringList() << "/path/to/helpers");
 ```
 
-Creating the first runner starts the interpreter (see [section 7](#7-python-home-and-virtual-environments)).
+Creating the first runner starts the interpreter (see [section 8](#8-python-home-and-virtual-environments)).
 The script is imported on the first call, not by the constructor.
+
+`runner->runnerId()` is the unique id of the runner, `NrPyCpp-<script name>{<uuid>}` (also the name of its
+thread). What the script sends back (messages, output, thread exceptions) is described in
+[section 7](#7-talking-back-to-c); `setCallbackHandler()` is the interface flavour of the same.
 
 ### Synchronous calls
 
@@ -209,7 +215,7 @@ def parse_header(packet):
   new runner imports the current version of the file (handy to reload an edited script).
 - **Imports.** The bundled standard library is available (`struct`, `zlib`, `hashlib`, `ssl`, `socket`,
   `ctypes`, `json`, `sqlite3`, `asyncio`...), except tkinter, idle, turtle, ensurepip and the dbm
-  backends. Third party packages come from the virtual environment (section 7).
+  backends. Third party packages come from the virtual environment (section 8).
 - **Output.** `print()` goes to the process stdout/stderr, unbuffered, so it is interleaved with the Qt
   log in the console.
 - **Threads in scripts** are allowed. Make them daemon threads: at exit the interpreter waits for the
@@ -236,7 +242,122 @@ def parse_header(packet):
 
 ---
 
-## 7. Python home and virtual environments
+## 7. Talking back to C++
+
+Besides returning a value, a script can send text to the C++ side. Everything is routed **per runner**:
+any number of runners share the interpreter and each one gets only what its own scripts produce.
+
+### The `nrpycpp` module
+
+The interpreter provides a built-in module `nrpycpp` (nothing to install, it is not a file):
+
+```python
+import nrpycpp
+
+nrpycpp.send_message("42% done")    # -> PyRunnerQt::messageReceived("42% done")
+nrpycpp.runner_id()                 # -> the id of the runner (PyRunnerQt::runnerId()), or None
+print("some text")                  # -> PyRunnerQt::outputReceived("some text")
+print("problem", file=sys.stderr)   # -> PyRunnerQt::errorOutputReceived("problem")
+```
+
+- `send_message(text)` raises `TypeError` if `text` is not a `str`, and `RuntimeError` if the calling code
+  does not belong to any runner (see the routing rules).
+- `runner_id()` returns the same string as `PyRunnerQt::runnerId()`: `NrPyCpp-<script name>{<uuid>}`.
+- Names starting with `_` are internal.
+- The module is only available when nrPyCpp started the interpreter itself. If the host application
+  initializes Python before the first runner, the module does not exist and the output is not routed
+  (the library logs a warning).
+
+### Signals
+
+```cpp
+connect(runner, &PyRunnerQt::messageReceived,     this, [](QString text)      { ... });
+connect(runner, &PyRunnerQt::outputReceived,      this, [](QString line)      { ... }); // stdout
+connect(runner, &PyRunnerQt::errorOutputReceived, this, [](QString line)      { ... }); // stderr
+connect(runner, &PyRunnerQt::unhandledException,  this, [](QString traceback) { ... });
+QString id = runner->runnerId();
+```
+
+- `outputReceived` / `errorOutputReceived` are emitted once per **line**, without the line end. Output is
+  line buffered per runner, stream and Python thread: a partial line (`print("x", end="")`) is delivered
+  when the thread calls `sys.stdout.flush()` and, for the thread running the call, at the latest when the
+  call ends. A partial line written by another thread waits for its end (or its flush).
+- `unhandledException` carries the traceback of an exception that escaped a Python thread started by the
+  script. Exceptions raised inside a call are not signalled: they are in the `PyFunctionCallResult`. The
+  traceback is not repeated in `errorOutputReceived`, but it is still printed on the console.
+- The signals are emitted from the Python thread and queued to the thread the `PyRunnerQt` lives in, like
+  `callCompletedSignal`. Output still goes to the console too, as it always did.
+
+### Which runner does the code belong to
+
+1. Code running inside a call of the runner (the function and what it calls).
+2. A thread created with `threading.Thread` (also `ThreadPoolExecutor` workers, `Timer`...) belongs to the
+   runner of the code that started it. Threads started by those threads belong to the same runner.
+3. Anything else belongs to **no** runner: its output is only written to the console and `send_message()`
+   raises `RuntimeError`. This is the case of threads created with `_thread.start_new_thread` (they bypass
+   `threading`) or by extension modules, and of code run after the runner has been destroyed.
+
+A thread outlives the call that started it, and the runner it belongs to may be destroyed before it ends: from
+then on its output is discarded and `send_message()` raises `RuntimeError`. No crash, and the other runners
+are not affected.
+
+### Callback interface
+
+For code that prefers an interface to signals (and for the users of the previous release) there is
+`PyCallBackIface`:
+
+```cpp
+#include "PyCallBackIface.h"
+
+class MyHandler : public PyCallBackIface {
+public:
+    void onStdOutput(const QSharedPointer<QString> &line) override;       // stdout and stderr lines
+    void onException(const QSharedPointer<QString> &traceback) override;  // unhandled thread exceptions
+    void onSendMessage(const QSharedPointer<QString> &message) override;  // nrpycpp.send_message()
+};
+
+runner->setCallbackHandler(&handler);   // not owned; nullptr removes it
+```
+
+The handler is called **synchronously from the Python thread that produced the event**, with the GIL held
+and while the runner's routing lock is held: keep it short, do not wait for other threads in it, and make it
+thread safe (several Python threads can call it). It may be used together with the signals. When
+`setCallbackHandler()` returns, the previous handler is not in use anymore, so it can be deleted. Remove
+the handler (or make sure it outlives the runner) before destroying the runner: the destructor of the
+runner also detaches it.
+
+### Moving from the previous release
+
+Scripts used `callbackHandler.send_message(...)` (with a ctypes or PySide module and the runner id passed
+by the C++ code): use `nrpycpp.send_message("...")` instead, there is no id to pass around. The C++ side,
+`PyCallBackIface` and `setCallbackHandler()`, is unchanged; `runnerId()` replaces `getRunnerId()`.
+Calling C++ (VDK) objects from Python, which the PySide/shiboken work aimed at, is not supported and
+not planned: scripts talk back only with text (`send_message()`, output, exceptions).
+
+### Example
+
+```python
+# analyzer.py
+import nrpycpp
+
+def analyze(capture):
+    for i, packet in enumerate(capture):
+        if i % 1000 == 0:
+            nrpycpp.send_message("packet %d of %d" % (i, len(capture)))
+        ...
+    print("done")
+    return summary
+```
+
+```cpp
+connect(runner, &PyRunnerQt::messageReceived, progressLabel, &QLabel::setText);
+connect(runner, &PyRunnerQt::outputReceived, logView, &QPlainTextEdit::appendPlainText);
+runner->asyncCallFunction("analyze", QVariantList() << capture);
+```
+
+---
+
+## 8. Python home and virtual environments
 
 ### Python home
 
@@ -283,7 +404,7 @@ the bundled one.
 
 ---
 
-## 8. Deploying an application
+## 9. Deploying an application
 
 Ship the shared library and the standard library from the `deps/python` package; leave out `include/`,
 `libs/` and `NRPYCPP_PYTHON.json` (it only records the origin of the package). Keep the license files.
@@ -328,14 +449,14 @@ The Linux package runs on glibc 2.17 and newer.
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | symptom | cause and fix |
 |---|---|
 | macOS: the process dies at start with no message (`Killed: 9`) | a dylib with a broken signature, usually after `install_name_tool`: re-sign it (`codesign -f -s - <dylib>` for development) |
-| `Library not loaded: libnrPyCpp.1.dylib` | the bare install name: set `DYLD_LIBRARY_PATH` in development, fix the reference in the bundle (section 8) |
+| `Library not loaded: libnrPyCpp.1.dylib` | the bare install name: set `DYLD_LIBRARY_PATH` in development, fix the reference in the bundle (section 9) |
 | `cannot initialize python ... Failed to import encodings module` | the python home is wrong or incomplete: check the path in the log, it must contain `lib/python3.13/encodings` (`Lib\encodings` on Windows) |
-| `cannot find a python home` | none of the locations of section 7 has a runtime: call `setPythonHome()` or set `NRPYCPP_PYTHONHOME` |
+| `cannot find a python home` | none of the locations of section 8 has a runtime: call `setPythonHome()` or set `NRPYCPP_PYTHONHOME` |
 | `virtual environment ... was created with python 3.12 ... ignoring it` | recreate the venv with Python 3.13 |
 | `ModuleNotFoundError` for a third party package | no venv configured, or the venv was ignored: look for `NrPyCpp:` lines in the log |
 | `ModuleNotFoundError` for a module next to the script | the module is in another folder: pass it in the `dependencies` of the runner |
@@ -343,4 +464,7 @@ The Linux package runs on glibc 2.17 and newer.
 | `setPythonHome()/setVirtualEnv() has no effect` | they were called after the interpreter was started: call them before the first runner |
 | Windows debug build fails to link `python313_d.lib` | `pyconfig.h` asks for a debug python; nrPyCpp hides `_DEBUG` around `Python.h` unless `NRPYCPP_PYTHON_DEBUG` is defined, so this only happens if Python.h is included elsewhere in a debug build |
 | Xcode 26: `implicitly declaring library function '__yield'` in `qyieldcpu.h` | a Qt 6.8 header issue with recent clang: add `QMAKE_CXXFLAGS += -Wno-error=implicit-function-declaration` (nrPyCpp and its tests do) |
+| `send_message()` raises `RuntimeError` | the code does not belong to a runner: a thread created with `_thread` or by a C extension, or the runner was destroyed (section 7) |
+| the output of a script is not delivered by the signals | python was started by the host application before the first runner (the `nrpycpp` module is not available), or the line is not complete yet: call `sys.stdout.flush()` |
+| macOS: `Killed: 9` after rebuilding in place | `cp` over a dylib that was already loaded keeps a stale signature in the kernel cache: remove `lib/last_build/*.dylib` before building again |
 | a call never returns | the Python function does not return (loop, blocking read): sync calls wait forever, use an async call or a timeout in the script |

@@ -10,7 +10,7 @@ TARGET = tst_nrpycpp
 macos: QMAKE_CXXFLAGS += -Wno-error=implicit-function-declaration
 
 SOURCES = tst_nrpycpp.cpp
-DISTFILES += scripts/codec.py scripts/broken.py scripts/dep/helper.py
+DISTFILES += scripts/talkback.py scripts/codec.py scripts/broken.py scripts/dep/helper.py
 
 NRPYCPP_DIR = $$clean_path($$PWD/../lib/last_build)
 INCLUDEPATH += $$NRPYCPP_DIR/include

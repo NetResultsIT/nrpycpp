@@ -44,6 +44,7 @@
 #pragma pop_macro("slots")
 
 #include "PyCall.h"
+#include "PyCallBackIface.h"
 
 enum  PyRunnerError //TODO move this into an nrcpptypes.h and include it in the wrapper
 {
@@ -61,6 +62,12 @@ class PyRunner : public QObject
     QString m_scriptFileName;
     QString m_scriptFilePath;
     QThread * m_pPythonThread;
+    QString m_runnerId;
+    PyCallBackIface * m_pCallbackHandler = nullptr; //guarded by the routing mutex (see pyrunner.cpp)
+    //pending partial line of stdout / stderr for each python thread (a thread that is in the middle of
+    //a print() must not get its line cut by another one), guarded by the routing mutex
+    QHash<quintptr, QString> m_outputBuffers[2];
+    void emitOutputLines(int stream, quintptr threadKey, bool includePartialLine); //with the routing mutex held
     void processCall(PyFunctionCall call);
 
     QHash<QUuid, PyFunctionCall> m_calls;
@@ -98,7 +105,22 @@ public:
     PyRunner(QString scriptPath, QStringList dependencies=QStringList());
     ~PyRunner();
 
+    //not wrapped automatically, PyRunnerQt::setCallbackHandler() is hand written (see the wrapper conf)
+    void setCallbackHandler(PyCallBackIface * pHandler);
+
+    /* Routing of what the scripts send back (nrpycpp python module, see nrpycppmodule.cpp).
+     * The runner is identified by its id, they return false if it does not exist (anymore). */
+    enum OutputStream { StdOut = 0, StdErr = 1 };
+    static QString currentRunnerId(); //the runner whose call is being processed on this thread, if any
+    static bool routeMessage(const QString &runnerId, const QString &text);
+    static bool routeOutput(const QString &runnerId, int stream, quintptr threadKey, const QString &text);
+    static bool flushOutput(const QString &runnerId, int stream, quintptr threadKey); //threadKey: the writing python thread
+    static bool routeException(const QString &runnerId, const QString &traceback);
+
     //START_WRAPPER_METHODS
+
+    //identification
+    QString runnerId();
 
     //utils
     void printCalls();
@@ -118,6 +140,10 @@ signals:
     void startCallRequestedSignal(PyFunctionCall call);
     //START_SIGNAL_METHODS
     void callCompletedSignal(QString);
+    void messageReceived(QString message);
+    void outputReceived(QString text);
+    void errorOutputReceived(QString text);
+    void unhandledException(QString traceback);
     //END_SIGNAL_METHODS
 
 private slots:
