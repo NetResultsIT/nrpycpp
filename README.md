@@ -15,7 +15,7 @@ else
 ```
 
 - Desktop only: macOS (universal arm64 + x86_64), Linux x86_64, Windows x64.
-- Qt 6 (tested with 6.8.6; Qt 5 should still build but is not tested any more), C++17, qmake.
+- Qt 6 (tested with 6.8.6; Qt 5 is not supported), C++17, qmake.
 - Python 3.13, embedded: the application ships its own relocatable CPython (about 10 MB compressed),
   published on artifactory as `deps/python`. No python installation is needed or used on the target machine.
 - Optional user virtual environment, for third party packages (`scapy`, `construct`, `crcmod`...).
