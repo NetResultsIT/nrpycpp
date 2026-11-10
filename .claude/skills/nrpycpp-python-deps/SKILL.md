@@ -79,7 +79,7 @@ python3 tools/prepare_python_runtime.py upload --out <work>             # token 
 ## Pitfalls seen
 - An arm64 dylib whose signature was broken by `install_name_tool` is SIGKILLed at load, silently
   (`Killed: 9`, no dyld message): re-sign (`codesign -f -s -`). This is what broke the old Xcode-python setup.
-- `libnrPyCpp`'s macOS install name is bare (`libnrPyCpp.1.dylib`): tests and samples need `DYLD_LIBRARY_PATH`.
+- `libnrPyCpp`'s macOS install name is bare (`libnrPyCpp.2.dylib`): tests and samples need `DYLD_LIBRARY_PATH`.
 - Xcode 26 + Qt 6.8: `qyieldcpu.h` `__yield` error, worked around with `-Wno-error=implicit-function-declaration`.
 - Linux archives have `share/terminfo` names differing only by case: unextractable on macOS/Windows,
   the script skips `share/` (not needed).

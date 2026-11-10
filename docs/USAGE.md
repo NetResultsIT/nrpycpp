@@ -412,15 +412,15 @@ Ship the shared library and the standard library from the `deps/python` package;
 **macOS** (app bundle):
 
 ```
-MyApp.app/Contents/Frameworks/libnrPyCpp.1.dylib
+MyApp.app/Contents/Frameworks/libnrPyCpp.2.dylib
 MyApp.app/Contents/Frameworks/libpython3.13.dylib       <- python/lib/libpython3.13.dylib
 MyApp.app/Contents/Resources/python/lib/python3.13/     <- python/lib/python3.13
 ```
 
 `libpython3.13.dylib` has the install name `@rpath/libpython3.13.dylib`, so the app needs an rpath to
 `@executable_path/../Frameworks` (qmake: `QMAKE_RPATHDIR += @executable_path/../Frameworks`). The
-library's own install name is a bare `libnrPyCpp.1.dylib`: fix the reference in the executable while
-bundling (`install_name_tool -change libnrPyCpp.1.dylib @rpath/libnrPyCpp.1.dylib`). Sign everything,
+library's own install name is a bare `libnrPyCpp.2.dylib`: fix the reference in the executable while
+bundling (`install_name_tool -change libnrPyCpp.2.dylib @rpath/libnrPyCpp.2.dylib`). Sign everything,
 dylibs first, with the application identity (after any `install_name_tool` the old signature is broken
 and an arm64 binary is killed at load). Keep the stdlib under `Resources`, not `Frameworks`: codesign
 expects only code in `Frameworks`.
@@ -440,7 +440,7 @@ MyApp\python\DLLs\           <- python\DLLs (extension modules and openssl, libf
 
 ```
 <prefix>/bin/myapp                                 (rpath $ORIGIN/../lib)
-<prefix>/lib/libnrPyCpp.so.1
+<prefix>/lib/libnrPyCpp.so.2
 <prefix>/lib/libpython3.13.so.1.0                  <- python/lib/libpython3.13.so.1.0
 <prefix>/lib/python/lib/python3.13/                <- python/lib/python3.13 (home = <prefix>/lib/python)
 ```
@@ -454,7 +454,7 @@ The Linux package runs on glibc 2.17 and newer.
 | symptom | cause and fix |
 |---|---|
 | macOS: the process dies at start with no message (`Killed: 9`) | a dylib with a broken signature, usually after `install_name_tool`: re-sign it (`codesign -f -s - <dylib>` for development) |
-| `Library not loaded: libnrPyCpp.1.dylib` | the bare install name: set `DYLD_LIBRARY_PATH` in development, fix the reference in the bundle (section 9) |
+| `Library not loaded: libnrPyCpp.2.dylib` | the bare install name: set `DYLD_LIBRARY_PATH` in development, fix the reference in the bundle (section 9) |
 | `cannot initialize python ... Failed to import encodings module` | the python home is wrong or incomplete: check the path in the log, it must contain `lib/python3.13/encodings` (`Lib\encodings` on Windows) |
 | `cannot find a python home` | none of the locations of section 8 has a runtime: call `setPythonHome()` or set `NRPYCPP_PYTHONHOME` |
 | `virtual environment ... was created with python 3.12 ... ignoring it` | recreate the venv with Python 3.13 |

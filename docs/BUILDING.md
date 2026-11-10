@@ -181,7 +181,7 @@ The result is copied into `lib/last_build/`:
 
 | | macOS | Linux | Windows |
 |---|---|---|---|
-| library | `libnrPyCpp.1.0.0.dylib` + links (`libnrPyCpp_debug.*` for debug) | `libnrPyCpp.so.1.0.0` + links (`_d`) | `nrPyCpp.dll/.lib/.pdb` (`nrPyCppd.*`) |
+| library | `libnrPyCpp.2.0.0.dylib` + links (`libnrPyCpp_debug.*` for debug) | `libnrPyCpp.so.2.0.0` + links (`_d`) | `nrPyCpp.dll/.lib/.pdb` (`nrPyCppd.*`) |
 | python | `libpython3.13.dylib` | `libpython3.13.so*` | `python313.dll` |
 | headers | `include/PyCall.h`, `include/PyRunnerQt.h`, `include/nrPyCppConfig.h` | same | same |
 
@@ -195,7 +195,7 @@ Notes:
 - The macOS post-link step copies the python dylib as it is (it already has `@rpath/libpython3.13.dylib`
   as install name and a valid signature). With the legacy Xcode python it changes the install name and
   re-signs the copy; never skip the re-sign, an arm64 dylib with a broken signature is killed at load.
-- The library's macOS install name is a bare `libnrPyCpp.1.dylib` (unchanged from the previous
+- The library's macOS install name is a bare `libnrPyCpp.2.dylib` (unchanged from the previous
   versions); consumers fix it when bundling.
 
 ---

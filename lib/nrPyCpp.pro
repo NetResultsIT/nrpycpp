@@ -1,5 +1,5 @@
 
-NRPYCPP_VERSION = 1.0.1
+NRPYCPP_VERSION = 2.0.0
 
 #DO NOT CHANGE ANYTHING BELOW THIS LINE UNLESS YOU ARE A MAINTAINER
 
@@ -20,6 +20,9 @@ CONFIG += c++17 debug_and_release
 CONFIG -= app_bundle
 
 TEMPLATE = lib
+# the library version follows the package one (libnrPyCpp.so.2, libnrPyCpp.2.dylib); no version in the dll name
+VERSION = $$NRPYCPP_VERSION
+win32: CONFIG += skip_target_version_ext
 win32 {
     CONFIG += console
 
