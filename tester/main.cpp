@@ -9,6 +9,9 @@ int main(int argc, char *argv[])
     QCoreApplication a(argc, argv);
 
     QString samplespath = QDir::currentPath() + "/../samples/";
+#ifdef Q_OS_MAC
+    samplespath = QDir::currentPath() + "/../../../../samples/";
+#endif
     qDebug() << "Using samples path: " << samplespath;
     QString pythonFilePath = samplespath + "PyTest.py";
 

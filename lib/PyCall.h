@@ -4,6 +4,7 @@
 #include <QDateTime>
 #include <QUuid>
 #include <QVariantList>
+#include <QDebug>
 
 struct PyFunctionCallResult
 {

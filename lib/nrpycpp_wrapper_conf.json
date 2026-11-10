@@ -15,6 +15,7 @@
         "\n#ifndef PYRUNNER_QT_INCS",
         "#define PYRUNNER_QT_INCS",
         "\n#include \"PyCall.h\"",
+        "#include \"PyCallBackIface.h\"",
         "#include <QStringList>",
         "#include <QVariantList>",
         "#include <QObject>",
@@ -36,7 +37,8 @@
         "    PyRunner *m_pPyRunner;",
         "\npublic:",
         "    PyRunnerQt(QString pythonscript, QStringList dependencies);",
-        "    ~PyRunnerQt();\n\n"
+        "    ~PyRunnerQt();",
+        "    void setCallbackHandler(PyCallBackIface * i_pCallbackHandler);\n\n"
       ],
       "header_class_stop": [
         "\n};",
@@ -60,6 +62,16 @@
         "{",
         "    delete m_pPyRunner;",
         "    PyEnvironment::getInstance().stop(); //FIXME we should add runner usages",
+        "}\n\n",
+        "/*!",
+        " * \\brief PyRunnerQt::setCallbackHandler sets the object that gets the output, the messages and the",
+        " * unhandled exceptions of the scripts of this runner (nullptr to remove it)",
+        " * \\note the handler is called synchronously from the python thread that produced the event, with the GIL held:",
+        " * keep it short and thread safe. When this method returns the previous handler is not in use anymore.",
+        " */",
+        "void PyRunnerQt::setCallbackHandler(PyCallBackIface *i_pCallbackHandler)",
+        "{",
+        "    m_pPyRunner->setCallbackHandler(i_pCallbackHandler);",
         "}\n\n"
       ],
       "impl_class_stop": []

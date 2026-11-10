@@ -49,22 +49,22 @@ void PyCppTester::executeTestList()
 
     funcname = "upper";
     paramlist << "ciccio";
-    //execute(funcname, paramlist);
+    execute(funcname, paramlist);
 
     funcname = "swapp";
     paramlist.clear();
     paramlist << "foo" << "bar";
-    //execute(funcname, paramlist);
+    execute(funcname, paramlist);
 
     funcname = "shiftR3";
     paramlist.clear();
     paramlist << "foo" << "bar" << "zoidberg";
-    //execute(funcname, paramlist);
+    execute(funcname, paramlist);
 
     funcname = "shiftR3";
     paramlist.clear();
     paramlist << 1 << false << 3.14;
-    //execute(funcname, paramlist);
+    execute(funcname, paramlist);
 
 
     funcname = "lengthy_func";
@@ -72,7 +72,7 @@ void PyCppTester::executeTestList()
     paramlist << 5;
     execute(funcname, paramlist, false);
 
-    qDebug() << "Printg calls...";
+    qDebug() << "Printing calls...";
     m_pPyRunner->printCalls();
 
     funcname = "sum";
@@ -100,7 +100,7 @@ void PyCppTester::executeTestList()
     paramlist.clear();
     QByteArray ba2(1000 ,'a');
     paramlist << ba2 << "a" << "x";
-    execute(funcname, paramlist);
+    //execute(funcname, paramlist);
 
     qDebug() << "sleeping for 2 secs";
     //sleep_for_millis(2000);
