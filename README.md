@@ -50,3 +50,7 @@ On Windows use `tests\run_tests.ps1` (see [docs/BUILDING.md](docs/BUILDING.md)).
 | `tests/` | the QtTest suite (`tst_nrpycpp`), its python scripts, the unit tests of the tools, `run_tests.sh/.ps1` |
 | `tools/prepare_python_runtime.py` | prepares and publishes the `deps/python` packages |
 | `tester/`, `samples/` | the original interactive sample (`nrPyCppTester`) and its scripts |
+
+## License
+
+MIT, see [LICENSE](LICENSE).

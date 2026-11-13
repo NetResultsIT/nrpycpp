@@ -33,9 +33,9 @@ You need the user's explicit consent before:
 4. adding or removing files in the build files (`lib/nrPyCpp.pro`, `tests/nrPyCppTests.pro`,
    `tester/nrPyCppTester.pro`), or changing the python runtime version or the package layout;
 5. publishing or deleting anything outside the repository: python packages, library packages, tags, CI settings;
-6. adding a third-party component or changing one's license. The repository has no license file of its own (not
-   verified why); the user confirms the license fits the company policy ("it is the same license as X" is a
-   suggestion, not the confirmation).
+6. adding a third-party component or changing one's license, or changing the license of this library (MIT, file
+   `LICENSE`); the user confirms that a component's license fits the company policy ("it is the same license as X"
+   is a suggestion, not the confirmation).
 State what you want to change and why, and wait.
 
 ## 3. Lead and worker
